@@ -1,6 +1,7 @@
 import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import icon from '../../resources/icon.png?asset'
 import { initDb, listNotes, createNote, updateNote, deleteNote } from './db'
 import type { CreateNoteInput, UpdateNoteInput } from '../shared/types'
 
@@ -12,6 +13,8 @@ function createWindow(): void {
     minHeight: 440,
     show: false,
     autoHideMenuBar: true,
+    // Windows / Linux 窗口与任务栏显示应用图标（macOS 由 .icns 打包注入）
+    ...(process.platform !== 'darwin' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false

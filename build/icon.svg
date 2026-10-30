@@ -1,0 +1,29 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#313136"/>
+      <stop offset="1" stop-color="#18181d"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#f0f0f4"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 背景：深色圆角面板 -->
+  <rect width="1024" height="1024" rx="232" fill="url(#bg)"/>
+
+  <!-- 笔记卡片 -->
+  <rect x="272" y="260" width="480" height="504" rx="64" fill="url(#card)"/>
+
+  <!-- 标题条 -->
+  <rect x="336" y="324" width="216" height="48" rx="24" fill="#232328"/>
+
+  <!-- 高亮行（琥珀色，应用的记忆点） -->
+  <rect x="336" y="428" width="264" height="32" rx="16" fill="#f59e0b"/>
+
+  <!-- 正文行 -->
+  <rect x="336" y="508" width="352" height="32" rx="16" fill="#e3e3e8"/>
+  <rect x="336" y="588" width="352" height="32" rx="16" fill="#e3e3e8"/>
+  <rect x="336" y="668" width="232" height="32" rx="16" fill="#e3e3e8"/>
+</svg>
