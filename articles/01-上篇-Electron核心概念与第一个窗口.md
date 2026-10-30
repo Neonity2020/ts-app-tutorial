@@ -1,0 +1,206 @@
+# TypeScript 全栈实录（上）：写桌面应用，为什么我还是选了 Electron？
+
+> 系列目录：
+> **上篇 · 架构与起航**：Electron 进程模型、脚手架、跑通第一个窗口（本篇）
+> 中篇 · 数据与界面：shadcn/ui + SQLite + IPC，实现笔记增删改查与自动保存
+> 下篇 · 打包与分发：electron-builder 打出 Windows / Mac 安装包，踩坑全复盘
+
+## 一、为什么是 Electron？
+
+2026 年了，聊桌面开发，Tauri、Flutter Desktop 都很香，但我依然把 Electron 放在首选——理由就一条：
+
+**它是把「Chromium 前端 + Node 后端」用一门前端语言工程化到开箱即用的最主流方案。**
+
+在 Electron 的世界里，你可以用 TypeScript 同时写出：
+
+- 一个跑在 Chromium 里的「前端」（界面）
+- 一个跑在 Node.js 里的「后端」（文件、数据库、系统能力）
+
+一个项目、一门语言、一套类型系统，从前端 UI 一路类型安全地贯通到 SQL 语句。这种「TS 全栈」的爽感，Web 开发者转桌面是最丝滑的。
+
+这个系列，我们就用 **Electron + Vite + React + shadcn/ui + better-sqlite3**，从零做一个真实可用的极简记事本：
+
+- 左侧笔记列表，右侧沉浸式编辑器
+- 停止输入自动保存进 SQLite（不是 localStorage，是真正的本地数据库）
+- 新建、编辑、删除一应俱全
+- 最终打包成 `.exe` 安装包，双击安装那种
+
+📷 **【截图占位 1：成品全貌图，应用运行界面，左侧笔记列表 + 右侧编辑器】**
+
+全部代码使用 pnpm 管理，Windows 主讲，macOS 差异随文标注 🍎。本篇是上篇，我们的目标只有一个：**搞懂 Electron 的进程模型，把开发环境跑起来。**
+
+## 二、30 秒理解 Electron：它其实是「一个网页 + 一个 Node 后端」
+
+先建立世界观。一个 Electron 应用里有三种角色：
+
+**1. 主进程（Main Process）** —— 相当于「Node 后端」
+整个应用有且只有一个。它掌管应用生命周期、创建窗口，并且只有它**能直接使用 Node.js 的全部能力**：读写文件、连数据库、调系统 API。我们后面写 SQLite 就在这层。
+
+**2. 渲染进程（Renderer Process）** —— 相当于「浏览器前端」
+每个窗口一个，本质上就是一个 Chromium 页面。你的 React 代码跑在这里。出于安全考虑，它**默认碰不到 Node**，就是个普通网页。
+
+**3. 预加载脚本（Preload Script）** —— 相当于「API 网关」
+夹在两者之间的一座桥。它把主进程的能力「挑着」暴露给渲染进程——你暴露什么，前端就能用什么，没暴露的就摸不到。
+
+那前端怎么调「后端」？通过 **IPC（进程间通信）**。渲染进程发一个请求，主进程处理后把结果送回来——写法上非常像前端调 HTTP 接口：
+
+```ts
+// 渲染进程里「发请求」
+const notes = await window.api.notes.list()
+
+// 主进程里「写接口」
+ipcMain.handle('notes:list', () => listNotes())
+```
+
+看，这不就是 `fetch('/api/notes')` 和 `app.get('/api/notes', ...)` 的亲戚吗？
+
+**所以 Electron 项目的本质是：一个 monorepo 式的 TS 项目，同时编译出「前端」和「后端」两部分，再用 IPC 把它们焊起来。** 这个认知建立好了，后面的目录结构你会一眼看懂。
+
+## 三、环境准备
+
+只需要两样东西（Windows / macOS 通用）：
+
+| 工具 | 版本要求 | 安装方式 |
+| --- | --- | --- |
+| Node.js | ≥ 22.12（20.19+ 亦可） | [nodejs.org](https://nodejs.org) 下载 LTS，或 macOS 用 `brew install node` |
+| pnpm | ≥ 9 | `npm install -g pnpm` |
+
+🍎 **macOS 差异**：装 Node 推荐用 Homebrew（`brew install node@22`），其余步骤与 Windows 完全一致。命令行里 `node -v` 和 `pnpm -v` 都能出版本号，就绪。
+
+编辑器用 VS Code，装上 ESLint 和 Prettier 插件即可。
+
+## 四、脚手架：一行命令生成工程
+
+社区为 Electron + Vite 做了一个官方推荐的脚手架 **electron-vite**（注意区分：它是「Vite 专为 Electron 定制的构建工具」，不是普通 Vite 插件的堆砌）。用它生成项目：
+
+```bash
+pnpm create @quick-start/electron notepad-app --template react-ts
+```
+
+命令会依次询问你要哪些增强（updater 插件、镜像加速等），一路回车默认即可。
+
+进入项目并安装依赖：
+
+```bash
+cd notepad-app
+pnpm install
+```
+
+💡 **这里有一个 90% 国内读者都会撞上的坑**：`pnpm install` 时报一堆 `TypeError: fetch failed`——这是 Electron 的二进制文件（约 100MB）要从 GitHub 下载，国内网络大概率失败。
+
+解法：在项目根目录建一个 `.npmrc`，写上国内镜像：
+
+```ini
+# .npmrc —— Electron 及打包工具的二进制国内镜像
+electron_mirror=https://npmmirror.com/mirrors/electron/
+electron_builder_binaries_mirror=https://npmmirror.com/mirrors/electron-builder-binaries/
+```
+
+然后重新 `pnpm install`，几十秒就能装完。这个文件后面打包安装包时还会再立一次功，先记下它。
+
+## 五、看懂目录：三个世界，各归其位
+
+用编辑器打开项目，核心结构是这样的：
+
+```
+notepad-app
+├─ electron.vite.config.ts   # 构建配置：同时描述三个构建目标
+├─ electron-builder.yml      # 打包配置（下篇的重头戏）
+├─ package.json              # "main" 指向主进程产物 out/main/index.js
+├─ tsconfig.node.json        # Node 侧 TS 配置（main + preload）
+├─ tsconfig.web.json         # 浏览器侧 TS 配置（renderer）
+└─ src/
+   ├─ main/                  # ① 主进程
+   │  └─ index.ts            #    应用生命周期、窗口创建
+   ├─ preload/               # ② 预加载脚本
+   │  ├─ index.ts            #    contextBridge 暴露 API
+   │  └─ index.d.ts          #    给 window.api 写类型声明
+   └─ renderer/              # ③ 渲染进程（就是普通 Vite + React 项目）
+      ├─ index.html
+      └─ src/
+         ├─ main.tsx
+         ├─ App.tsx
+         └─ assets/
+```
+
+三个目录对应前面说的三种角色，而且**连 TS 配置都是分开的**——`tsconfig.node.json` 管主进程和预加载（能用 Node API），`tsconfig.web.json` 管渲染进程（纯浏览器环境）。类型系统从一开始就在帮你「隔离两个世界」。
+
+再看一眼 `electron.vite.config.ts`：
+
+```ts
+import { resolve } from 'path'
+import { defineConfig } from 'electron-vite'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  main: {},        // 主进程构建目标
+  preload: {},     // 预加载构建目标
+  renderer: {      // 渲染进程构建目标
+    resolve: {
+      alias: {
+        '@renderer': resolve('src/renderer/src')
+      }
+    },
+    plugins: [react()]
+  }
+})
+```
+
+一个配置文件，声明三个构建入口，`pnpm dev` 时三部分并行增量构建、热更新。这就是 electron-vite 的价值：把 Electron 项目里最琐碎的工程化一次做对。
+
+💡 还有个值得注意的细节：`main` 和 `preload` 的配置是**空的**，但我们后面要用的 better-sqlite3（原生模块）并不会被 Vite 打包进去——electron-vite 从 v5 起内置了「依赖外置」：凡写在 `package.json` `dependencies` 里的包，主进程构建时自动外置、运行时从 node_modules 加载。原生模块必须走这条通道，这一点中篇会用到。
+
+## 六、点火：第一个窗口
+
+```bash
+pnpm dev
+```
+
+📷 **【截图占位 2：pnpm dev 启动后的默认欢迎窗口（带 Electron logo 和版本号）】**
+
+一个桌面窗口弹了出来——注意，这不是浏览器页面，是货真价实的桌面应用，窗口可以拖拽、缩放、最小化。
+
+此时按 `F12` 还能呼出熟悉的 Chrome DevTools 来调试界面，和网络应用的手感完全一致。
+
+热更新也是现成的：改一下 `src/renderer/src/App.tsx` 里的文案保存，窗口内容立刻刷新；而如果你改的是 `src/main/index.ts`，electron-vite 会自动重启整个应用。前后端各自热更，体验和 Web 开发无差。
+
+最后动两行代码找找手感——把窗口做得更像一个记事本。改 `src/main/index.ts` 里 `createWindow` 的参数：
+
+```ts
+const mainWindow = new BrowserWindow({
+  width: 960,      // 调宽一点
+  height: 640,
+  minWidth: 680,   // 顺手加上最小尺寸限制
+  minHeight: 440,
+  show: false,
+  autoHideMenuBar: true,
+  webPreferences: {
+    preload: join(__dirname, '../preload/index.js'),
+    sandbox: false
+  }
+})
+```
+
+再把 `src/renderer/index.html` 的标题改掉：
+
+```html
+<title>极简记事本</title>
+```
+
+保存后应用自动重启，窗口标题变成了「极简记事本」。恭喜，开发流水线已经完全跑通。
+
+## 七、上篇小结
+
+这一篇我们搞明白了三件事：
+
+1. **Electron = 主进程（Node 后端）+ 渲染进程（浏览器前端）+ preload（网关）**，通过 IPC 通信——这就是「TS 全栈桌面应用」的底层结构；
+2. **electron-vite 脚手架**把三进程的工程化一次配齐，国内网络记得先配好 `.npmrc` 镜像；
+3. `pnpm dev` 就是你的开发循环，前端热更、后端自动重启、F12 调试。
+
+下一篇我们动真格：接入 **shadcn/ui** 搭出精致的界面，用 **better-sqlite3** 在主进程里建一个真正的本地数据库，再用 **IPC + TypeScript 类型链**把前后端焊死——记事本的增删改查和自动保存，一篇写完。
+
+> 觉得有收获的话，点个「在看」就是最大的支持。我们中篇见 👋
+
+---
+
+*本文配套完整源码已在 GitHub 开源：`你的仓库地址/notepad-app`（文章发布时替换为实际地址）*
